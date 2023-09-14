@@ -8,7 +8,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 )
@@ -20,6 +19,7 @@ type ExampleTask struct {
 	wg         *sync.WaitGroup
 	logger     *log.Logger
 	timeoutCtx context.Context
+	result     chan any
 }
 
 func (t *ExampleTask) GetName() string {
@@ -46,7 +46,7 @@ func (t *ExampleTask) Execute() error {
 
 	defer res.Body.Close()
 	//data, err := io.ReadAll(res.Body)
-	_, err = io.ReadAll(res.Body)
+	data, err := io.ReadAll(res.Body)
 	if err != nil {
 		t.logger.Fatalln("Failed to read response body", err)
 		return err
@@ -54,19 +54,20 @@ func (t *ExampleTask) Execute() error {
 	//t.logger.Println("Response status code:", res.StatusCode)
 	//t.logger.Println("Response size:", len(data))
 
+	t.result <- data
 	return nil
 }
 
 func (t *ExampleTask) OnFailure(err error) {
 	t.logger.Fatalln("Failed to execute task", t.id, t.name, err)
-	panic(err)
 }
 
 func main() {
 	ctx := context.Background()
 	logger := &log.Logger{}
+	var result [][]byte
 	numWorkers := 5
-	channelSize := 25
+	channelSize := 150
 
 	cMap := cmap.New[[]string]()
 	pool, err := workerPool.NewWorkerPool(numWorkers, channelSize, logger, &cMap)
@@ -76,10 +77,10 @@ func main() {
 	pool.Start()
 
 	wg := &sync.WaitGroup{}
-
+	start := time.Now()
 	for i := 0; i < channelSize; i++ {
 		wg.Add(1)
-		timeoutCtx, _ := context.WithTimeout(ctx, 10*time.Second)
+		timeoutCtx, _ := context.WithTimeout(ctx, 5*time.Second)
 		task := &ExampleTask{
 			id:         i,
 			name:       "request",
@@ -87,16 +88,30 @@ func main() {
 			wg:         wg,
 			logger:     logger,
 			timeoutCtx: timeoutCtx,
+			result:     pool.GetResultChan(),
 		}
 
 		pool.AddWork(task)
 	}
+
+	go func() {
+		for {
+			select {
+			case res := <-pool.GetResultChan():
+				result = append(result, res.([]byte))
+			}
+		}
+	}()
 	wg.Wait()
 
 	pool.Stop()
+	fmt.Printf("Took %s\n", time.Since(start))
 
 	time.Sleep(500 * time.Millisecond)
+
+	fmt.Printf("Result: %d, Expected %d\n", len(result), channelSize)
+	fmt.Println("Tasks per worker:")
 	cMap.IterCb(func(key string, value []string) {
-		fmt.Printf("Worker: %s, Tasks(%d): %s\n", key, len(value), strings.Join(value, ", "))
+		fmt.Printf("Worker: %s, Tasks(%d)\n", key, len(value))
 	})
 }

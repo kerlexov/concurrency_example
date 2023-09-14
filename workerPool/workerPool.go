@@ -11,6 +11,7 @@ import (
 type WorkerPool struct {
 	numWorkers int
 	tasks      chan Task
+	result     chan any
 
 	logger *log.Logger
 	// ensure the pool can only be started once
@@ -54,7 +55,7 @@ func (wp *WorkerPool) startWorkers() {
 					if ok {
 						wp.workerTasks.Set(workerKey, append(workerTasks, task.GetName()))
 					} else {
-						wp.workerTasks.Set(workerKey, append([]string{}, task.GetName()))
+						wp.workerTasks.Set(workerKey, []string{task.GetName()})
 					}
 
 					if err := task.Execute(); err != nil {
@@ -92,14 +93,19 @@ func NewWorkerPool(numWorkers int, channelSize int, logger *log.Logger, wt *cmap
 	}
 
 	tasks := make(chan Task, channelSize)
-
+	result := make(chan any)
 	return &WorkerPool{
 		numWorkers:  numWorkers,
 		tasks:       tasks,
 		logger:      logger,
+		result:      result,
 		start:       sync.Once{},
 		stop:        sync.Once{},
 		workerTasks: wt,
 		quit:        make(chan struct{}),
 	}, nil
+}
+
+func (wp *WorkerPool) GetResultChan() chan any {
+	return wp.result
 }
