@@ -1,5 +1,7 @@
 package workerPool
 
+import "net/http"
+
 type Pool interface {
 	// Start gets the worker pool ready to process jobs, and should only be called once
 	Start()
@@ -11,11 +13,13 @@ type Pool interface {
 	AddWork(Task)
 	// GetResultChan returns the channel that results are sent on
 	GetResultChan() chan any
+	// GetErrorChan returns the channel that errors are sent on
+	GetErrorChan() chan error
 }
 
 type Task interface {
 	// Execute performs the work
-	Execute() error
+	Execute(client *http.Client) error
 	// OnFailure handles any error returned from Execute()
 	OnFailure(error)
 	// GetName returns the name of the task

@@ -1,33 +1,31 @@
 package workerPool
 
 import (
+	"crypto/tls"
 	"errors"
-	"fmt"
-	cmap "github.com/orcaman/concurrent-map/v2"
 	"log"
+	"net/http"
 	"sync"
+	"time"
 )
 
 type WorkerPool struct {
 	numWorkers int
 	tasks      chan Task
 	result     chan any
-
-	logger *log.Logger
+	error      chan error
+	logger     *log.Logger
 	// ensure the pool can only be started once
 	start sync.Once
 	// ensure the pool can only be stopped once
 	stop sync.Once
-
-	workerTasks *cmap.ConcurrentMap[string, []string]
-
 	// close to signal the workers to stop working
 	quit chan struct{}
 }
 
 func (wp *WorkerPool) Start() {
 	wp.start.Do(func() {
-		log.Print("starting worker pool")
+		wp.logger.Println("starting worker pool")
 		wp.startWorkers()
 	})
 }
@@ -35,41 +33,35 @@ func (wp *WorkerPool) Start() {
 func (wp *WorkerPool) startWorkers() {
 	for i := 0; i < wp.numWorkers; i++ {
 		go func(workerNum int) {
-			log.Printf("starting worker %d", workerNum)
+			wp.logger.Printf("starting worker %d", workerNum)
+			client := newHttpClient()
 
 			for {
 				select {
 				case <-wp.quit:
-					log.Printf("stopping worker %d with quit channel\n", workerNum)
+					wp.logger.Printf("stopping worker %d with quit channel\n", workerNum)
 					return
 				case task, ok := <-wp.tasks:
 					if !ok {
-						log.Printf("stopping worker %d with closed tasks channel\n", workerNum)
+						wp.logger.Printf("stopping worker %d with closed tasks channel\n", workerNum)
 						return
 					}
 
-					log.Printf("Started task %s on worker %d", task.GetName(), workerNum)
+					wp.logger.Printf("Started task %s on worker %d", task.GetName(), workerNum)
 
-					workerKey := fmt.Sprintf("W%d", workerNum)
-					workerTasks, ok := wp.workerTasks.Get(workerKey)
-					if ok {
-						wp.workerTasks.Set(workerKey, append(workerTasks, task.GetName()))
-					} else {
-						wp.workerTasks.Set(workerKey, []string{task.GetName()})
-					}
-
-					if err := task.Execute(); err != nil {
+					if err := task.Execute(client); err != nil {
 						task.OnFailure(err)
 					}
 				}
 			}
 		}(i)
+		time.Sleep(1 * time.Millisecond)
 	}
 }
 
 func (wp *WorkerPool) Stop() {
 	wp.stop.Do(func() {
-		log.Print("stopping worker pool")
+		wp.logger.Println("stopping worker pool")
 		close(wp.quit)
 	})
 }
@@ -84,7 +76,7 @@ func (wp *WorkerPool) AddWork(task Task) {
 var ErrNoWorkers = errors.New("cannot create a pool with no workers")
 var ErrNegativeChannelSize = errors.New("cannot create a pool with a negative channel size")
 
-func NewWorkerPool(numWorkers int, channelSize int, logger *log.Logger, wt *cmap.ConcurrentMap[string, []string]) (Pool, error) {
+func NewWorkerPool(numWorkers int, channelSize int, logger *log.Logger) (Pool, error) {
 	if numWorkers <= 0 {
 		return nil, ErrNoWorkers
 	}
@@ -94,18 +86,40 @@ func NewWorkerPool(numWorkers int, channelSize int, logger *log.Logger, wt *cmap
 
 	tasks := make(chan Task, channelSize)
 	result := make(chan any)
+	errs := make(chan error)
 	return &WorkerPool{
-		numWorkers:  numWorkers,
-		tasks:       tasks,
-		logger:      logger,
-		result:      result,
-		start:       sync.Once{},
-		stop:        sync.Once{},
-		workerTasks: wt,
-		quit:        make(chan struct{}),
+		numWorkers: numWorkers,
+		tasks:      tasks,
+		logger:     logger,
+		result:     result,
+		error:      errs,
+		start:      sync.Once{},
+		stop:       sync.Once{},
+		quit:       make(chan struct{}),
 	}, nil
 }
 
 func (wp *WorkerPool) GetResultChan() chan any {
 	return wp.result
+}
+func (wp *WorkerPool) GetErrorChan() chan error {
+	return wp.error
+}
+
+func newHttpClient() *http.Client {
+	defaultTransport := http.DefaultTransport.(*http.Transport)
+	transport := &http.Transport{
+		Proxy:                 defaultTransport.Proxy,
+		DialContext:           defaultTransport.DialContext,
+		MaxIdleConns:          defaultTransport.MaxIdleConns,
+		IdleConnTimeout:       defaultTransport.IdleConnTimeout,
+		ExpectContinueTimeout: defaultTransport.ExpectContinueTimeout,
+		TLSHandshakeTimeout:   defaultTransport.TLSHandshakeTimeout,
+		ResponseHeaderTimeout: defaultTransport.ResponseHeaderTimeout,
+		TLSClientConfig: &tls.Config{
+			InsecureSkipVerify: true,
+		},
+	}
+
+	return &http.Client{Transport: transport, Timeout: time.Duration(2) * time.Second}
 }

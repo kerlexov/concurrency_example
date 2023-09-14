@@ -4,7 +4,6 @@ import (
 	"concurrency_example/workerPool"
 	"context"
 	"fmt"
-	cmap "github.com/orcaman/concurrent-map/v2"
 	"io"
 	"log"
 	"net/http"
@@ -17,60 +16,53 @@ type ExampleTask struct {
 	name       string
 	url        string
 	wg         *sync.WaitGroup
-	logger     *log.Logger
 	timeoutCtx context.Context
 	result     chan any
+	errors     chan error
 }
 
 func (t *ExampleTask) GetName() string {
 	return fmt.Sprintf("%s - %d", t.name, t.id)
 }
 
-func (t *ExampleTask) Execute() error {
-	//t.logger.Println("Executing task", t.GetName())
+func (t *ExampleTask) Execute(client *http.Client) error {
 	if t.wg != nil {
 		defer t.wg.Done()
 	}
 
 	req, err := http.NewRequestWithContext(t.timeoutCtx, "GET", t.url, nil)
 	if err != nil {
-		t.logger.Fatalln("Failed to create request", err)
 		return err
 	}
+	res, err := client.Do(req)
 
-	res, err := http.DefaultClient.Do(req)
 	if err != nil {
-		t.logger.Fatalln("Failed to execute request", err)
 		return err
 	}
 
 	defer res.Body.Close()
-	//data, err := io.ReadAll(res.Body)
 	data, err := io.ReadAll(res.Body)
 	if err != nil {
-		t.logger.Fatalln("Failed to read response body", err)
 		return err
 	}
-	//t.logger.Println("Response status code:", res.StatusCode)
-	//t.logger.Println("Response size:", len(data))
 
 	t.result <- data
 	return nil
 }
 
 func (t *ExampleTask) OnFailure(err error) {
-	t.logger.Fatalln("Failed to execute task", t.id, t.name, err)
+	t.errors <- err
 }
 
 func main() {
 	ctx := context.Background()
-	logger := &log.Logger{}
-	var result [][]byte
-	numWorkers := 5
-	channelSize := 150
+	logger := log.New(log.Writer(), "", log.LstdFlags)
+	result := make([][]byte, 0)
+	errs := make([]error, 0)
+	numWorkers := 500
+	channelSize := 1500
 
-	cMap := cmap.New[[]string]()
-	pool, err := workerPool.NewWorkerPool(numWorkers, channelSize, logger, &cMap)
+	pool, err := workerPool.NewWorkerPool(numWorkers, channelSize, logger)
 	if err != nil {
 		panic(err)
 	}
@@ -80,18 +72,19 @@ func main() {
 	start := time.Now()
 	for i := 0; i < channelSize; i++ {
 		wg.Add(1)
-		timeoutCtx, _ := context.WithTimeout(ctx, 5*time.Second)
+		timeoutCtx, _ := context.WithTimeout(ctx, 2*time.Second)
 		task := &ExampleTask{
 			id:         i,
 			name:       "request",
-			url:        "https://google.com",
+			url:        "https://example.com",
 			wg:         wg,
-			logger:     logger,
 			timeoutCtx: timeoutCtx,
 			result:     pool.GetResultChan(),
+			errors:     pool.GetErrorChan(),
 		}
 
 		pool.AddWork(task)
+		time.Sleep(5 * time.Millisecond)
 	}
 
 	go func() {
@@ -99,19 +92,17 @@ func main() {
 			select {
 			case res := <-pool.GetResultChan():
 				result = append(result, res.([]byte))
+			case errori := <-pool.GetErrorChan():
+				errs = append(errs, errori)
 			}
 		}
 	}()
 	wg.Wait()
-
+	totalTime := time.Since(start)
 	pool.Stop()
-	fmt.Printf("Took %s\n", time.Since(start))
-
 	time.Sleep(500 * time.Millisecond)
 
-	fmt.Printf("Result: %d, Expected %d\n", len(result), channelSize)
-	fmt.Println("Tasks per worker:")
-	cMap.IterCb(func(key string, value []string) {
-		fmt.Printf("Worker: %s, Tasks(%d)\n", key, len(value))
-	})
+	logger.Printf("Took %s\n", totalTime)
+	logger.Printf("Result: %d, Expected %d\n", len(result), channelSize)
+	logger.Printf("Errors  %d\n", len(errs))
 }
