@@ -1,7 +1,6 @@
 package workerPool
 
 import (
-	cmap "github.com/orcaman/concurrent-map/v2"
 	"log"
 	"sync"
 	"testing"
@@ -13,13 +12,12 @@ func TestWorkerPool_Work(t *testing.T) {
 
 	for i := 0; i < 20; i++ {
 		wg.Add(1)
-		tasks = append(tasks, newTestTask(nil, false, wg))
+		tasks = append(tasks, newTestTask(i, nil, false, wg))
 	}
 
-	logger := &log.Logger{}
-	cMap := cmap.New[[]string]()
+	logger := log.New(log.Writer(), "", log.LstdFlags)
 
-	p, err := NewWorkerPool(5, len(tasks), logger, &cMap)
+	p, err := NewWorkerPool(5, len(tasks), logger)
 	if err != nil {
 		t.Fatal("error making worker pool:", err)
 	}

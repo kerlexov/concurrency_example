@@ -1,7 +1,6 @@
 package workerPool
 
 import (
-	cmap "github.com/orcaman/concurrent-map/v2"
 	"log"
 	"sync"
 	"testing"
@@ -9,10 +8,9 @@ import (
 )
 
 func TestWorkerPool_BlockedAddWorkReleaseAfterStop(t *testing.T) {
-	logger := &log.Logger{}
-	cMap := cmap.New[[]string]()
+	logger := log.New(log.Writer(), "", log.LstdFlags)
 
-	p, err := NewWorkerPool(1, 0, logger, &cMap)
+	p, err := NewWorkerPool(1, 0, logger)
 	if err != nil {
 		t.Fatal("error making worker pool:", err)
 	}
@@ -23,13 +21,13 @@ func TestWorkerPool_BlockedAddWorkReleaseAfterStop(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		// the first should start processing right away, the second two should hang
 		wg.Add(1)
-		go func() {
-			p.AddWork(newTestTask(func() error {
+		go func(id int) {
+			p.AddWork(newTestTask(id, func() error {
 				time.Sleep(20 * time.Second)
 				return nil
 			}, false, nil))
 			wg.Done()
-		}()
+		}(i)
 	}
 
 	done := make(chan struct{})

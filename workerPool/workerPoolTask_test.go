@@ -2,6 +2,7 @@ package workerPool
 
 import (
 	"fmt"
+	"net/http"
 	"sync"
 	"time"
 )
@@ -18,8 +19,9 @@ type testTask struct {
 	failureHandled bool
 }
 
-func newTestTask(executeFunc func() error, shouldErr bool, wg *sync.WaitGroup) *testTask {
+func newTestTask(id int, executeFunc func() error, shouldErr bool, wg *sync.WaitGroup) *testTask {
 	return &testTask{
+		id:          id,
 		executeFunc: executeFunc,
 		shouldErr:   shouldErr,
 		wg:          wg,
@@ -28,9 +30,9 @@ func newTestTask(executeFunc func() error, shouldErr bool, wg *sync.WaitGroup) *
 }
 
 func (t *testTask) GetName() string {
-	return fmt.Sprintf("%s - %d", t.name, t.id)
+	return fmt.Sprintf("%d", t.id)
 }
-func (t *testTask) Execute() error {
+func (t *testTask) Execute(client *http.Client) error {
 	if t.wg != nil {
 		defer t.wg.Done()
 	}
